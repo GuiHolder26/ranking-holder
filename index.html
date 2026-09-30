@@ -195,6 +195,9 @@ const DEFAULT_CONFIG = {
 let CONFIG = null;
 let RANKED_ANO = [], RANKED_MES = [], RANKED_DESAFIO = [];
 let TOTAL_ANO = 0, TOTAL_MES = 0, TOTAL_DESAFIO = 0;
+let DESAFIO_INICIO_MES = null; // mês da 1ª venda depois da marcação "VENDAS DA HOLDER" (só para o texto dos slides)
+function isHolderMarker(v){ return typeof v === "string" && /VENDAS DA HOLDER|DAQUI PARA BAIXO/i.test(v); }
+function desafioInicioLabel(){ return mesTitle(DESAFIO_INICIO_MES || CONFIG.desafioMes || "OUTUBRO"); }
 let MES_COL_KEY = "MÊS"; // resolvido dinamicamente a cada busca (a planilha usa um cabeçalho tipo "VENDAS HOLDER 2026 MÊS")
 let currentSlide = 0;
 const SLIDE_COUNT = 7;
@@ -288,9 +291,16 @@ function processRows(rows){
   const mesAtualNome = (CONFIG.mesReferencia||"SETEMBRO").toUpperCase();
   const desafioStartIdx = Math.max(0, MESES.indexOf((CONFIG.desafioMes||"OUTUBRO").toUpperCase()));
 
+  // Marcação na planilha ("VENDAS DA HOLDER DAQUI PARA BAIXO"): a partir dela as vendas contam para o
+  // Desafio Holder / Corretor Campeão e para a Meta Anual da Empresa. Sem marcação, vale o mês de início configurado.
+  const markerFound = rows.some(r=> Object.values(r).some(v=> isHolderMarker(v)));
+  let afterMarker = false;
+  DESAFIO_INICIO_MES = null;
+
   rows.forEach(r=>{
+    if(Object.values(r).some(v=> isHolderMarker(v))){ afterMarker = true; return; }
     const mesCell = (r[MES_COL_KEY]||"").toString().trim();
-    if(mesCell) lastMes = mesCell.toUpperCase();
+    if(mesCell && MESES.includes(mesCell.toUpperCase())) lastMes = mesCell.toUpperCase();
     const corretorRaw = (r["CORRETOR"]||"").toString().trim();
     if(!corretorRaw) return;
     if(EXCLUDE.includes(corretorRaw.toLowerCase())) return;
@@ -312,7 +322,9 @@ function processRows(rows){
     }
 
     const mesIdx = MESES.indexOf(lastMes);
-    if(mesIdx >= desafioStartIdx){
+    const contaDesafio = markerFound ? afterMarker : (mesIdx >= desafioStartIdx);
+    if(contaDesafio){
+      if(!DESAFIO_INICIO_MES) DESAFIO_INICIO_MES = lastMes;
       if(!perDesafio[nome]) perDesafio[nome] = {count:0, vgv:0};
       perDesafio[nome].count += 1;
       perDesafio[nome].vgv += valor;
@@ -362,21 +374,31 @@ function normKey(s){ return (s||"").toString().normalize("NFD").replace(/[̀-ͯ]
 const MESES_NORM = MESES.map(normKey);
 let SHEET_CONFIG_OK = false;
 
+// Lê cada célula da coluna B separadamente: o Google "adivinha" um único tipo por coluna e apagaria
+// os textos (empresa, meses, link) numa coluna que tem maioria de números.
+function sheetCsvUrl(range){
+  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(CONFIG_SHEET_NAME)}&headers=0&range=${range}&_=${Date.now()}`;
+}
+function parseCsvLines(txt){
+  return (txt||"").split(/\r?\n/).map(l=>{ const t=l.trim(); return (t.startsWith('"') && t.endsWith('"')) ? t.slice(1,-1).replace(/""/g,'"') : t; });
+}
 async function fetchSheetConfig(){
   try{
-    const resp = await loadGvizJsonp('sheet=' + encodeURIComponent(CONFIG_SHEET_NAME) + '&headers=0&range=A1:B40');
-    if(!resp || resp.status === 'error' || !resp.table) { SHEET_CONFIG_OK = false; return; }
+    const colA = await fetch(sheetCsvUrl('A1:A40')).then(r=>{ if(!r.ok) throw new Error(r.status); return r.text(); });
+    const keys = parseCsvLines(colA);
+    const wanted = [];
+    keys.forEach((k,i)=>{ const f = CONFIG_FIELDS[normKey(k)]; if(f) wanted.push({row:i+1, field:f}); });
+    if(!wanted.length){ SHEET_CONFIG_OK = false; return; }
+    const values = await Promise.all(wanted.map(w=> fetch(sheetCsvUrl('B'+w.row)).then(r=>r.ok?r.text():"").catch(()=>"")));
     const prevMusic = CONFIG.youtubeUrl + '|' + CONFIG.musicVolume;
-    resp.table.rows.forEach(r=>{
-      const k = r.c && r.c[0] ? normKey(r.c[0].v ?? r.c[0].f) : "";
-      const cell = r.c && r.c[1];
-      const raw = cell ? (cell.v !== null && cell.v !== undefined ? cell.v : (cell.f||"")) : "";
-      const field = CONFIG_FIELDS[k];
-      if(!field || raw === "" || raw === null) return;
-      const [prop, type] = field;
-      if(type === "int"){ const n = parseInt(String(raw).replace(/\D/g,"")); if(!isNaN(n)) CONFIG[prop] = n; }
-      else if(type === "mes"){ const i = MESES_NORM.indexOf(normKey(raw)); if(i >= 0) CONFIG[prop] = MESES[i]; }
-      else CONFIG[prop] = String(raw).trim();
+    wanted.forEach((w,i)=>{
+      const raw = (parseCsvLines(values[i])[0]||"").trim();
+      if(!raw) return;
+      const [prop, type] = w.field;
+      if(type === "int"){ const n = parseInt(raw.replace(/\D/g,"")); if(!isNaN(n)) CONFIG[prop] = n; }
+      else if(type === "mes"){ const j = MESES_NORM.indexOf(normKey(raw)); if(j >= 0) CONFIG[prop] = MESES[j]; }
+      else if(prop === "youtubeUrl"){ if(extractYouTubeId(raw)) CONFIG[prop] = raw; }
+      else CONFIG[prop] = raw;
     });
     SHEET_CONFIG_OK = true;
     if(prevMusic !== CONFIG.youtubeUrl + '|' + CONFIG.musicVolume) applyMusicConfig();
@@ -456,8 +478,7 @@ function renderSlideDesafioCampeao(){
   const { podiumHtml, restHtml, hasRest, top1 } = renderPodiumAndRest(RANKED_DESAFIO, 'vendasDesafio', 'vgvDesafio');
   const min = CONFIG.minVendasViagem;
   const faltamViagem = top1 ? Math.max(0, min - top1.vendasDesafio) : min;
-  const mesRaw = (CONFIG.desafioMes||"OUTUBRO");
-  const mesLabel = mesTitle(mesRaw);
+  const mesLabel = desafioInicioLabel();
   return `
     <div class="eyebrow">${CONFIG.empresa} &middot; Desafio Holder</div>
     <h1 class="slide-title">Corretor Campeão</h1>
@@ -552,8 +573,7 @@ function renderSlideAnualEmpresa(){
   const now = new Date();
   const mesesRestantes = Math.max(1, 12 - now.getMonth());
   const ritmoNecessario = Math.ceil(faltamAno / mesesRestantes);
-  const mesRaw = (CONFIG.desafioMes||"OUTUBRO");
-  const mesLabel = mesTitle(mesRaw);
+  const mesLabel = desafioInicioLabel();
   return `
     <div class="eyebrow">${CONFIG.empresa} &middot; Meta Anual</div>
     <h1 class="slide-title">Meta Anual da Empresa</h1>
