@@ -123,7 +123,7 @@
 <div class="admin-overlay" id="adminOverlay">
   <div class="admin-box">
     <h2>Configurações do ranking</h2>
-    <p class="hint">As vendas vêm automaticamente da planilha. Aqui você só ajusta as metas e o nome da empresa (fica salvo neste navegador).</p>
+    <p class="hint">As vendas vêm automaticamente da planilha. As metas também vêm da aba <b>CONFIG</b> da planilha e valem para todas as telas. O que você salvar aqui só vale neste navegador e só é usado quando o campo estiver vazio na planilha.</p>
     <div class="field-row"><label>Empresa</label><input id="cfgEmpresa"></div>
     <div class="field-row"><label>Meta individual mensal (vendas)</label><input id="cfgMetaIndividual" type="number"></div>
     <div class="field-row"><label>Meta 1 &middot; Equipe (vendas)</label><input id="cfgMeta1" type="number"></div>
@@ -263,7 +263,7 @@ function applyMusicConfig(){
 }
 
 // ---------------- Busca via JSONP (funciona mesmo abrindo o arquivo direto do computador) ----------------
-function loadGvizJsonp(){
+function loadGvizJsonp(query){
   return new Promise((resolve, reject)=>{
     const cbName = 'gvizCb_' + Date.now();
     const timeout = setTimeout(()=>{ cleanup(); reject(new Error('timeout')); }, 12000);
@@ -274,7 +274,7 @@ function loadGvizJsonp(){
     }
     window[cbName] = function(resp){ cleanup(); resolve(resp); };
     const script = document.createElement('script');
-    script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${GID}&headers=2&tqx=out:jsonp;responseHandler:${cbName}&_=${Date.now()}`;
+    script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?${query || ('gid=' + GID + '&headers=2')}&tqx=out:jsonp;responseHandler:${cbName}&_=${Date.now()}`;
     script.onerror = ()=>{ cleanup(); reject(new Error('script error')); };
     document.body.appendChild(script);
   });
@@ -339,6 +339,48 @@ function setStatus(msg, isErr){
   const el = document.getElementById('statusPill');
   el.textContent = msg;
   el.classList.toggle('err', !!isErr);
+}
+
+// ---------------- Configurações vindas da aba "CONFIG" da planilha ----------------
+// Coluna A = nome do campo, coluna B = valor. Célula vazia ou aba inexistente => usa o que está salvo na engrenagem.
+const CONFIG_SHEET_NAME = "CONFIG";
+const CONFIG_FIELDS = {
+  "EMPRESA": ["empresa", "text"],
+  "META INDIVIDUAL": ["metaIndividualMensal", "int"],
+  "META EQUIPE 1": ["metaEquipe1", "int"],
+  "META EQUIPE 2": ["metaEquipe2", "int"],
+  "META EQUIPE 3": ["metaEquipe3", "int"],
+  "META ANUAL EMPRESA": ["metaAnualEmpresa", "int"],
+  "MINIMO VENDAS VIAGEM": ["minVendasViagem", "int"],
+  "DESAFIO MES INICIO": ["desafioMes", "mes"],
+  "DESAFIO ANO": ["desafioAno", "int"],
+  "MES REFERENCIA": ["mesReferencia", "mes"],
+  "MUSICA YOUTUBE": ["youtubeUrl", "text"],
+  "VOLUME MUSICA": ["musicVolume", "int"]
+};
+function normKey(s){ return (s||"").toString().normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim(); }
+const MESES_NORM = MESES.map(normKey);
+let SHEET_CONFIG_OK = false;
+
+async function fetchSheetConfig(){
+  try{
+    const resp = await loadGvizJsonp('sheet=' + encodeURIComponent(CONFIG_SHEET_NAME) + '&headers=0&range=A1:B40');
+    if(!resp || resp.status === 'error' || !resp.table) { SHEET_CONFIG_OK = false; return; }
+    const prevMusic = CONFIG.youtubeUrl + '|' + CONFIG.musicVolume;
+    resp.table.rows.forEach(r=>{
+      const k = r.c && r.c[0] ? normKey(r.c[0].v ?? r.c[0].f) : "";
+      const cell = r.c && r.c[1];
+      const raw = cell ? (cell.v !== null && cell.v !== undefined ? cell.v : (cell.f||"")) : "";
+      const field = CONFIG_FIELDS[k];
+      if(!field || raw === "" || raw === null) return;
+      const [prop, type] = field;
+      if(type === "int"){ const n = parseInt(String(raw).replace(/\D/g,"")); if(!isNaN(n)) CONFIG[prop] = n; }
+      else if(type === "mes"){ const i = MESES_NORM.indexOf(normKey(raw)); if(i >= 0) CONFIG[prop] = MESES[i]; }
+      else CONFIG[prop] = String(raw).trim();
+    });
+    SHEET_CONFIG_OK = true;
+    if(prevMusic !== CONFIG.youtubeUrl + '|' + CONFIG.musicVolume) applyMusicConfig();
+  }catch(e){ SHEET_CONFIG_OK = false; }
 }
 
 async function fetchAndProcess(){
@@ -583,7 +625,7 @@ document.getElementById('saveBtn').onclick = async ()=>{
   applyMusicConfig();
 };
 
-async function refresh(){ await fetchAndProcess(); renderAll(); }
+async function refresh(){ loadConfig(); await fetchSheetConfig(); await fetchAndProcess(); renderAll(); }
 
 (async function(){
   loadConfig();
