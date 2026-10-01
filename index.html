@@ -243,7 +243,11 @@ function onYouTubeIframeAPIReady(){
     playerVars: { autoplay: 1, mute: 0, rel: 0, playsinline: 1, controls: 0 },
     events: {
       onReady: ()=>{ ytReady = true; applyMusicConfig(); },
-      onStateChange: (e)=>{ if(e.data === YT.PlayerState.ENDED){ e.target.seekTo(0); e.target.playVideo(); } } // repete em loop
+      onStateChange: (e)=>{ if(e.data === YT.PlayerState.ENDED && !(MUSIC_PLAYING_KEY||'').startsWith('list:')){ e.target.seekTo(0); e.target.playVideo(); } }, // vídeo único repete em loop; playlist usa setLoop
+      onError: ()=>{ // playlist/mix que não abre fora do YouTube: toca só o vídeo do link, em loop
+        const id = extractYouTubeId(CONFIG.youtubeUrl);
+        if((MUSIC_PLAYING_KEY||'').startsWith('list:') && id){ MUSIC_PLAYING_KEY = 'video:'+id; try{ ytPlayer.loadVideoById(id); }catch(e){} }
+      }
     }
   });
 }
@@ -254,15 +258,30 @@ function onYouTubeIframeAPIReady(){
 })();
 
 // Aplica o link/volume atuais da CONFIG ao player (chamado quando o player fica pronto e sempre que salva a engrenagem)
+let MUSIC_PLAYING_KEY = null; // o que está tocando agora — só reinicia a música se o link mudar de verdade
+function extractYouTubeList(input){
+  const m = (input||"").match(/[?&]list=([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : null;
+}
 function applyMusicConfig(){
   if(!ytReady || !ytPlayer) return;
-  const id = extractYouTubeId(CONFIG.youtubeUrl);
+  const url = (CONFIG.youtubeUrl||"").trim();
+  const listId = extractYouTubeList(url);
+  const id = extractYouTubeId(url);
+  const key = listId ? 'list:'+listId : (id ? 'video:'+id : null);
   const vol = Math.max(0, Math.min(100, CONFIG.musicVolume||40));
   try{
-    if(!id){ ytPlayer.stopVideo(); return; }
-    ytPlayer.setVolume(vol);
-    ytPlayer.loadVideoById(id);
-  }catch(e){ /* API pode não estar pronta ainda; onReady chama de novo */ }
+    ytPlayer.setVolume(vol); // volume muda sem reiniciar a música
+    if(key === MUSIC_PLAYING_KEY) return;
+    MUSIC_PLAYING_KEY = key;
+    if(!key){ ytPlayer.stopVideo(); return; }
+    if(listId){
+      ytPlayer.loadPlaylist({ list: listId, listType: 'playlist', index: 0 });
+      ytPlayer.setLoop(true);
+    } else {
+      ytPlayer.loadVideoById(id);
+    }
+  }catch(e){ MUSIC_PLAYING_KEY = null; /* API pode não estar pronta ainda; onReady chama de novo */ }
 }
 
 // ---------------- Busca via JSONP (funciona mesmo abrindo o arquivo direto do computador) ----------------
@@ -397,7 +416,7 @@ async function fetchSheetConfig(){
       const [prop, type] = w.field;
       if(type === "int"){ const n = parseInt(raw.replace(/\D/g,"")); if(!isNaN(n)) CONFIG[prop] = n; }
       else if(type === "mes"){ const j = MESES_NORM.indexOf(normKey(raw)); if(j >= 0) CONFIG[prop] = MESES[j]; }
-      else if(prop === "youtubeUrl"){ if(extractYouTubeId(raw)) CONFIG[prop] = raw; }
+      else if(prop === "youtubeUrl"){ if(extractYouTubeId(raw) || extractYouTubeList(raw)) CONFIG[prop] = raw; }
       else CONFIG[prop] = raw;
     });
     SHEET_CONFIG_OK = true;
