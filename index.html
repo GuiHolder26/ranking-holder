@@ -358,9 +358,9 @@ function processRows(rows){
     nome, vendasDesafio: perDesafio[nome].count, vgvDesafio: perDesafio[nome].vgv
   }));
 
-  RANKED_ANO = [...anoArr].sort((a,b)=> b.vendasAno - a.vendasAno || b.vgvAno - a.vgvAno);
-  RANKED_MES = [...anoArr].sort((a,b)=> b.vendasMes - a.vendasMes || b.vgvMes - a.vgvMes);
-  RANKED_DESAFIO = [...desafioArr].sort((a,b)=> b.vendasDesafio - a.vendasDesafio || b.vgvDesafio - a.vgvDesafio);
+  RANKED_ANO = anoArr.filter(c=>!isOculto(c.nome)).sort((a,b)=> b.vendasAno - a.vendasAno || b.vgvAno - a.vgvAno);
+  RANKED_MES = anoArr.filter(c=>!isOculto(c.nome)).sort((a,b)=> b.vendasMes - a.vendasMes || b.vgvMes - a.vgvMes);
+  RANKED_DESAFIO = desafioArr.filter(c=>!isOculto(c.nome)).sort((a,b)=> b.vendasDesafio - a.vendasDesafio || b.vgvDesafio - a.vgvDesafio);
   TOTAL_ANO = anoArr.reduce((s,c)=>s+c.vendasAno,0);
   TOTAL_MES = anoArr.reduce((s,c)=>s+c.vendasMes,0);
   TOTAL_DESAFIO = desafioArr.reduce((s,c)=>s+c.vendasDesafio,0);
@@ -387,8 +387,15 @@ const CONFIG_FIELDS = {
   "DESAFIO ANO": ["desafioAno", "int"],
   "MES REFERENCIA": ["mesReferencia", "mes"],
   "MUSICA YOUTUBE": ["youtubeUrl", "text"],
-  "VOLUME MUSICA": ["musicVolume", "int"]
+  "VOLUME MUSICA": ["musicVolume", "int"],
+  "OCULTAR CORRETORES": ["ocultarCorretores", "text"]
 };
+// Corretores escondidos dos rankings (nomes separados por vírgula na aba CONFIG). As vendas deles continuam nos totais da empresa.
+function isOculto(nome){
+  const lista = (CONFIG.ocultarCorretores||"").split(/[,;\/]| e /i).map(normKey).filter(Boolean);
+  const n = normKey(nome);
+  return lista.some(o => n === o || n.startsWith(o + " "));
+}
 function normKey(s){ return (s||"").toString().normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim(); }
 const MESES_NORM = MESES.map(normKey);
 let SHEET_CONFIG_OK = false;
